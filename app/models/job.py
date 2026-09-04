@@ -15,6 +15,9 @@ class Job(Base, TimestampMixin):
     # INGESTION, BULK_STANDARDIZE, BULK_SIMILARITY, INDEX_BUILD, REPROCESSING
     job_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     
+    # Multi-tenancy isolation (NULL = system/admin job, non-NULL = tenant specific job)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    
     # QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED
     status: Mapped[str] = mapped_column(String(32), default="QUEUED", nullable=False, index=True)
     progress_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

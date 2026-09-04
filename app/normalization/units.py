@@ -22,7 +22,9 @@ class NormalizedMeasurement:
     normalized_unit: str
     normalized_relation: str
     p_activity: Optional[float]
-    is_outlier: bool
+    p_activity_relation: Optional[str] = "="
+    is_censored: bool = False
+    is_outlier: bool = False
     qc_warning: Optional[str] = None
 
 
@@ -142,13 +144,27 @@ def normalize_bioactivity(
 
     # Calculate pActivity (-log10 Molar) for concentration types (IC50, EC50, Ki, Kd, GI50)
     p_activity = None
+    p_activity_relation = "="
+    is_censored = orig_rel in ("<", "<=", ">", ">=", "~")
+
     act_type_upper = (activity_type or "").upper()
     if norm_unit == "nM" and norm_val > 0 and act_type_upper in ("IC50", "EC50", "KI", "KD", "GI50", "POTENCY"):
         molar_val = norm_val * 1e-9
         try:
             p_activity = round(-math.log10(molar_val), 3)
+            # Mathematical property: negative logarithm inverts the inequality
+            # e.g., IC50 > 10,000 nM -> pIC50 < 5.0
+            if orig_rel in (">", ">="):
+                p_activity_relation = "<=" if orig_rel == ">=" else "<"
+            elif orig_rel in ("<", "<="):
+                p_activity_relation = ">=" if orig_rel == "<=" else ">"
+            elif orig_rel in ("~", "approx"):
+                p_activity_relation = "~"
+            else:
+                p_activity_relation = "="
         except (ValueError, OverflowError):
             p_activity = None
+            p_activity_relation = "="
 
     return NormalizedMeasurement(
         original_value=value,
@@ -158,6 +174,8 @@ def normalize_bioactivity(
         normalized_unit=norm_unit,
         normalized_relation=norm_rel,
         p_activity=p_activity,
+        p_activity_relation=p_activity_relation,
+        is_censored=is_censored,
         is_outlier=is_outlier,
         qc_warning=qc_warning,
     )

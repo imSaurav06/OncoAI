@@ -66,6 +66,9 @@ class Assay(Base, TimestampMixin):
     
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     curation_status: Mapped[str] = mapped_column(String(32), default="CURATED", nullable=False)
+    
+    # Multi-tenancy isolation (NULL = public assay, non-NULL = proprietary tenant assay)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     target: Mapped[Optional["Target"]] = relationship("Target", back_populates="assays")
     cell_line: Mapped[Optional["CellLine"]] = relationship("CellLine", back_populates="assays")
@@ -93,6 +96,9 @@ class Bioactivity(Base, TimestampMixin):
     # Distinguish public literature/database data from proprietary wet-lab / experimental feedback
     is_experimental: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
+    # Multi-tenancy isolation (NULL = shared public bioactivity, non-NULL = private tenant measurement)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
     # Activity measurement (Heterogeneous types: IC50, EC50, Ki, Kd, GI50, % Inhibition, etc.)
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
@@ -107,7 +113,10 @@ class Bioactivity(Base, TimestampMixin):
     normalized_unit: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # pActivity (-log10 Molar, e.g. pIC50, pKi for ML-ready modeling)
+    # Notice p_activity_relation inverts on negative logarithm (e.g. > 10,000 nM -> pIC50 < 5.0)
     p_activity: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)
+    p_activity_relation: Mapped[Optional[str]] = mapped_column(String(16), default="=", nullable=True)
+    is_censored: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
     # Relationships
     compound: Mapped["Compound"] = relationship("Compound", back_populates="bioactivities")

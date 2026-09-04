@@ -4,14 +4,14 @@ Chemistry & Compound API Endpoints (Section 40 of architecture).
 import time
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 import rdkit
 
 from app.config.settings import settings
 from app.storage.database import get_db
-from app.security.auth import verify_api_key
+from app.security.auth import verify_api_key, TenantContext
 from app.api.dependencies import get_request_id
 from app.api.middleware import create_error_response
 from app.schemas.envelope import ApiResponse, ResponseMeta
@@ -71,6 +71,7 @@ async def analyze_compound(
         isomeric_smiles=res.standardization.isomeric_smiles,
         inchikey=res.standardization.inchikey,
         inchi=res.standardization.inchi,
+        has_stereochemistry=res.standardization.has_stereochemistry,
         murcko_scaffold_smiles=res.murcko_scaffold,
         descriptors=MolecularDescriptors(**res.descriptors),
         fingerprint_summary={
@@ -144,7 +145,7 @@ async def get_compound_by_id(
     compound_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
@@ -161,13 +162,19 @@ async def get_compound_by_id(
     res = await db.execute(stmt)
     comp = res.scalar_one_or_none()
 
-    if not comp:
+    # Multi-tenant isolation: hide private compounds from other tenants
+    if not comp or (not auth.is_admin and comp.tenant_id is not None and comp.tenant_id != auth.tenant_id):
         return create_error_response(
             req_id, status.HTTP_404_NOT_FOUND, "COMPOUND_NOT_FOUND", f"Compound {compound_id} not found"
         )
 
     # Activity count
     act_stmt = select(func.count(Bioactivity.bioactivity_id)).where(Bioactivity.compound_id == compound_id)
+    if not auth.is_admin:
+        if auth.tenant_id:
+            act_stmt = act_stmt.where(or_(Bioactivity.tenant_id.is_(None), Bioactivity.tenant_id == auth.tenant_id))
+        else:
+            act_stmt = act_stmt.where(Bioactivity.tenant_id.is_(None))
     act_count_res = await db.execute(act_stmt)
     act_count = act_count_res.scalar_one() or 0
 
@@ -203,6 +210,7 @@ async def get_compound_by_id(
             source_id=ident.source_id,
         )
         for ident in comp.identifiers
+        if auth.is_admin or ident.tenant_id is None or ident.tenant_id == auth.tenant_id
     ]
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -219,6 +227,7 @@ async def get_compound_by_id(
         isomeric_smiles=comp.isomeric_smiles,
         inchikey=comp.inchikey,
         inchi=comp.inchi,
+        has_stereochemistry=comp.has_stereochemistry,
         molecular_formula=comp.molecular_formula,
         molecular_weight=comp.molecular_weight,
         exact_mass=comp.exact_mass,
@@ -246,7 +255,7 @@ async def search_compounds(
     payload: CompoundSearchRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
@@ -265,6 +274,8 @@ async def search_compounds(
             scaffold_smiles=payload.scaffold_smiles,
             molecular_formula=payload.molecular_formula,
             identifier=payload.identifier,
+            tenant_id=auth.tenant_id,
+            is_admin=auth.is_admin,
             limit=payload.limit,
             offset=payload.offset,
         )
@@ -300,7 +311,7 @@ async def search_similarity(
     payload: SimilaritySearchRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
@@ -314,6 +325,8 @@ async def search_similarity(
             target_id=payload.target_id,
             activity_type=payload.activity_type,
             max_activity_nm=payload.max_activity_nm,
+            tenant_id=auth.tenant_id,
+            is_admin=auth.is_admin,
         )
     except ChemistryPipelineError as err:
         return create_error_response(req_id, status.HTTP_422_UNPROCESSABLE_ENTITY, err.code, err.message)

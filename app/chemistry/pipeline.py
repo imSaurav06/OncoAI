@@ -47,6 +47,7 @@ class StandardizationResult:
     salt_fragment_smiles: Optional[str]
     parent_smiles: str
     mol: Chem.Mol
+    has_stereochemistry: bool = False
 
 
 @dataclass
@@ -63,7 +64,8 @@ class AnalysisResult:
 class ChemistryPipeline:
     """
     Deterministic chemistry standardization and property extraction engine.
-    Ensures reproducibility across platform versions.
+    Ensures reproducibility across platform versions while strictly preserving
+    chemical stereochemistry (enantiomers, diastereomers, and E/Z double bonds).
     """
 
     def __init__(self):
@@ -71,6 +73,12 @@ class ChemistryPipeline:
         self.pipeline_version = settings.PIPELINE_VERSION
         self.fragment_chooser = rdMolStandardize.LargestFragmentChooser()
         self.uncharger = rdMolStandardize.Uncharger()
+        
+        # Configure TautomerEnumerator to preserve stereocenters
+        self.tautomer_enumerator = rdMolStandardize.TautomerEnumerator()
+        self.tautomer_enumerator.SetRemoveSp3Stereo(False)
+        self.tautomer_enumerator.SetRemoveBondStereo(False)
+        self.tautomer_enumerator.SetReassignStereo(True)
 
     def standardize(self, raw_smiles: str) -> StandardizationResult:
         """
@@ -138,8 +146,9 @@ class ChemistryPipeline:
             if pre_charge != post_charge:
                 charge_neutralized = True
 
-            # 4d: Tautomer canonicalization
-            final_mol = rdMolStandardize.CanonicalTautomer(uncharged_mol)
+            # 4d: Tautomer canonicalization (with stereochemistry preservation)
+            final_mol = self.tautomer_enumerator.Canonicalize(uncharged_mol)
+            Chem.AssignStereochemistry(final_mol, force=True, cleanIt=True)
 
         except Exception as exc:
             raise StandardizationError(
@@ -148,9 +157,13 @@ class ChemistryPipeline:
                 {"original_smiles": clean_input}
             )
 
-        # Step 5: Canonicalize representations
-        canonical_smiles = Chem.MolToSmiles(final_mol, canonical=True, isomericSmiles=False)
-        isomeric_smiles = Chem.MolToSmiles(final_mol, canonical=True, isomericSmiles=True)
+        # Step 5: Canonicalize representations (preserving stereocenters and bond stereo)
+        canonical_smiles = Chem.MolToSmiles(final_mol, canonical=True, isomericSmiles=True)
+        isomeric_smiles = canonical_smiles
+        
+        # Check stereochemistry presence
+        chiral_centers = Chem.FindMolChiralCenters(final_mol, includeUnassigned=True)
+        has_stereochemistry = len(chiral_centers) > 0
         
         try:
             inchi = Chem.MolToInchi(final_mol)
@@ -174,6 +187,7 @@ class ChemistryPipeline:
             salt_fragment_smiles=salt_fragment_smiles,
             parent_smiles=canonical_smiles,
             mol=final_mol,
+            has_stereochemistry=has_stereochemistry,
         )
 
     def analyze(self, raw_smiles: str) -> AnalysisResult:

@@ -9,7 +9,7 @@ import rdkit
 
 from app.config.settings import settings
 from app.storage.database import get_db
-from app.security.auth import verify_api_key
+from app.security.auth import verify_api_key, TenantContext
 from app.api.dependencies import get_request_id
 from app.schemas.envelope import ApiResponse, ResponseMeta
 from app.schemas.bioactivity import (
@@ -32,7 +32,7 @@ async def search_bioactivity(
     payload: BioactivitySearchRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
@@ -47,8 +47,11 @@ async def search_bioactivity(
         min_normalized_value=payload.min_normalized_value,
         max_normalized_value=payload.max_normalized_value,
         min_p_activity=payload.min_p_activity,
+        is_censored=payload.is_censored,
         is_experimental=payload.is_experimental,
         source_id=payload.source_id,
+        tenant_id=auth.tenant_id,
+        is_admin=auth.is_admin,
         limit=payload.limit,
         offset=payload.offset,
     )

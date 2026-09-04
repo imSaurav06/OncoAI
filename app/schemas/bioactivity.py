@@ -14,6 +14,7 @@ class BioactivitySearchRequest(BaseModel):
     min_normalized_value: Optional[float] = Field(None, description="Minimum normalized activity value (in nM)")
     max_normalized_value: Optional[float] = Field(None, description="Maximum normalized activity value (in nM)")
     min_p_activity: Optional[float] = Field(None, description="Minimum -log10 Molar potency (e.g. 7.0 for 100 nM)")
+    is_censored: Optional[bool] = Field(None, description="Filter for censored observations (<, >, ~) vs exact values (=)")
     is_experimental: Optional[bool] = Field(None, description="Filter for in-house wet-lab feedback vs public data")
     source_id: Optional[str] = Field(None, description="Filter by data source (e.g. SRC_CHEMBL, SRC_PUBCHEM)")
     limit: int = Field(default=50, ge=1, le=1000, description="Page size (max 1000)")
@@ -41,6 +42,8 @@ class BioactivityItem(BaseModel):
     normalized_value: float
     normalized_unit: str
     p_activity: Optional[float] = None
+    p_activity_relation: Optional[str] = "="
+    is_censored: bool = False
     
     is_experimental: bool = False
     source_name: Optional[str] = None

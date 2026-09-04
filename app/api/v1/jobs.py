@@ -10,7 +10,7 @@ import rdkit
 
 from app.config.settings import settings
 from app.storage.database import get_db
-from app.security.auth import verify_api_key
+from app.security.auth import verify_api_key, TenantContext
 from app.api.dependencies import get_request_id
 from app.api.middleware import create_error_response
 from app.schemas.envelope import ApiResponse, ResponseMeta
@@ -35,7 +35,7 @@ async def submit_job(
     payload: CreateJobRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
@@ -44,6 +44,7 @@ async def submit_job(
         db=db,
         job_type=payload.job_type,
         input_params=payload.input_params,
+        tenant_id=auth.tenant_id,
     )
 
     # Dispatch ingestion task if INGESTION
@@ -66,6 +67,7 @@ async def submit_job(
             dataset_name=ds_name,
             dataset_version=ds_ver,
             raw_records_data=raw_records,
+            tenant_id=auth.tenant_id,
         )
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -99,13 +101,13 @@ async def get_job_status(
     job_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
+    auth: TenantContext = Depends(verify_api_key),
 ):
     req_id = get_request_id(request)
     start_time = time.perf_counter()
 
     job = await job_manager.get_job(db, job_id)
-    if not job:
+    if not job or (not auth.is_admin and job.tenant_id is not None and job.tenant_id != auth.tenant_id):
         return create_error_response(
             req_id, status.HTTP_404_NOT_FOUND, "JOB_NOT_FOUND", f"Job {job_id} not found"
         )

@@ -29,7 +29,8 @@ class EntityResolver:
         db: AsyncSession,
         raw_smiles: str,
         identifiers: Optional[List[Dict[str, str]]] = None,
-        source_record_id: Optional[str] = None
+        source_record_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Tuple[Compound, bool, AnalysisResult]:
         """
         Resolves an input SMILES to a canonical Compound.
@@ -48,7 +49,7 @@ class EntityResolver:
         if existing_compound:
             # Compound already cataloged: update identifiers if new ones supplied
             if identifiers:
-                await self._attach_identifiers(db, existing_compound.compound_id, identifiers)
+                await self._attach_identifiers(db, existing_compound.compound_id, identifiers, tenant_id=tenant_id)
             
             # If source record is provided, link it
             if source_record_id:
@@ -77,6 +78,8 @@ class EntityResolver:
             heavy_atom_count=desc["heavy_atom_count"],
             formal_charge=desc["formal_charge"],
             murcko_scaffold_smiles=analysis.murcko_scaffold,
+            has_stereochemistry=std.has_stereochemistry,
+            tenant_id=tenant_id,
             processing_version=analysis.pipeline_version,
             rdkit_version=analysis.rdkit_version,
         )
@@ -113,7 +116,7 @@ class EntityResolver:
 
         # Attach any identifiers (IUPAC, trade name, external accession)
         if identifiers:
-            await self._attach_identifiers(db, compound_id, identifiers)
+            await self._attach_identifiers(db, compound_id, identifiers, tenant_id=tenant_id)
 
         # Link source record if provided
         if source_record_id:
@@ -128,7 +131,7 @@ class EntityResolver:
         return new_compound, True, analysis
 
     async def _attach_identifiers(
-        self, db: AsyncSession, compound_id: str, identifiers: List[Dict[str, str]]
+        self, db: AsyncSession, compound_id: str, identifiers: List[Dict[str, str]], tenant_id: Optional[str] = None
     ) -> None:
         """Appends new synonyms or identifiers to compound, avoiding duplicates."""
         stmt = select(CompoundIdentifier).where(CompoundIdentifier.compound_id == compound_id)
@@ -141,6 +144,7 @@ class EntityResolver:
                 cid = CompoundIdentifier(
                     compound_id=compound_id,
                     source_id=item.get("source_id"),
+                    tenant_id=tenant_id,
                     identifier_type=item["identifier_type"],
                     identifier_value=item["identifier_value"],
                 )

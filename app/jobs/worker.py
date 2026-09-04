@@ -21,12 +21,13 @@ class JobManager:
     """
 
     async def create_job(
-        self, db: AsyncSession, job_type: str, input_params: Dict[str, Any]
+        self, db: AsyncSession, job_type: str, input_params: Dict[str, Any], tenant_id: Optional[str] = None
     ) -> Job:
         job_id = f"JOB_{uuid.uuid4().hex[:12].upper()}"
         job = Job(
             job_id=job_id,
             job_type=job_type,
+            tenant_id=tenant_id,
             status="QUEUED",
             progress_pct=0.0,
             input_params_json=json.dumps(input_params),

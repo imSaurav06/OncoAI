@@ -47,6 +47,7 @@ class AnalyzeResponse(BaseModel):
     isomeric_smiles: Optional[str]
     inchikey: str
     inchi: Optional[str]
+    has_stereochemistry: bool = Field(default=False, description="Flag indicating presence of chiral centers or stereochemistry")
     murcko_scaffold_smiles: Optional[str] = Field(None, description="Bemis-Murcko core carbon skeleton")
     descriptors: MolecularDescriptors
     fingerprint_summary: Dict[str, int] = Field(..., description="Fingerprint metadata: n_bits, on_bits_count")
@@ -66,6 +67,7 @@ class CompoundDetailResponse(BaseModel):
     isomeric_smiles: Optional[str]
     inchikey: str
     inchi: Optional[str]
+    has_stereochemistry: bool = False
     molecular_formula: str
     molecular_weight: float
     exact_mass: Optional[float]

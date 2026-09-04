@@ -29,6 +29,12 @@ class Compound(Base, TimestampMixin):
     # Oncology & Medicinal Chemistry Scaffold
     murcko_scaffold_smiles: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     
+    # Stereochemistry indicator
+    has_stereochemistry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
+    # Multi-tenancy isolation (NULL = shared public reference compound, non-NULL = proprietary tenant lead)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
     # Traceability & Versioning
     processing_version: Mapped[str] = mapped_column(String(64), nullable=False)
     rdkit_version: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -102,6 +108,7 @@ class CompoundIdentifier(Base, TimestampMixin):
         String(64), ForeignKey("compounds.compound_id", ondelete="CASCADE"), nullable=False, index=True
     )
     source_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     
     # e.g. IUPAC_NAME, TRADE_NAME, SYNONYM, CAS_NUMBER, EXTERNAL_ACCESSION
     identifier_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

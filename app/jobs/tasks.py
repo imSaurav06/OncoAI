@@ -2,9 +2,10 @@
 Job Task Implementations (Section 19 of architecture).
 Handles ingestion, bulk standardization, and indexing jobs.
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,16 +28,18 @@ async def run_ingestion_task(
     dataset_name: str,
     dataset_version: str,
     raw_records_data: List[Dict[str, Any]],
+    tenant_id: Optional[str] = None,
     progress_callback=None
 ) -> Dict[str, Any]:
     """
-    Executes end-to-end ingestion:
+    Executes end-to-end ingestion with idempotent deduplication and tenant isolation:
     1. Archives raw payload into Layer A (Object Store)
-    2. Registers Source & Dataset metadata
-    3. Iterates over records with RDKit standardization, entity deduplication,
+    2. Registers Source & Dataset metadata with tenant context
+    3. Idempotently queries or inserts SourceRecords
+    4. Iterates over records with RDKit standardization, entity deduplication,
        unit normalization, and QC tracking
-    4. Writes processed batch into Layer B (Parquet lake)
-    5. Returns execution and QC summary
+    5. Writes processed batch into Layer B (Parquet lake)
+    6. Returns execution and QC summary
     """
     auditor = QualityAuditor()
     parquet_lake = get_parquet_lake()
@@ -66,6 +69,7 @@ async def run_ingestion_task(
             source_id=source.source_id,
             name=dataset_name,
             version=dataset_version,
+            tenant_id=tenant_id,
             record_count=0,
         )
         db.add(dataset)
@@ -95,19 +99,36 @@ async def run_ingestion_task(
     parquet_bioactivities: List[Dict[str, Any]] = []
 
     for idx, prec in enumerate(parsed_records):
-        src_rec_id = f"SR_{uuid.uuid4().hex[:12].upper()}"
-        source_record = SourceRecord(
-            source_record_id=src_rec_id,
-            source_id=source.source_id,
-            dataset_id=dataset_id,
-            external_id=prec.external_id,
-            raw_payload_uri=raw_uri,
-            content_hash=payload_hash,
-            raw_structure_string=prec.raw_structure_string,
-            status="INGESTED",
+        # Deterministic source record ID derived from (dataset_id, external_id)
+        content_key = f"{dataset_id}:{prec.external_id}"
+        src_rec_id = f"SR_{hashlib.sha256(content_key.encode()).hexdigest()[:16].upper()}"
+
+        # Idempotency check: check if SourceRecord already exists
+        sr_stmt = select(SourceRecord).where(
+            SourceRecord.dataset_id == dataset_id,
+            SourceRecord.external_id == prec.external_id
         )
-        db.add(source_record)
-        await db.flush()
+        sr_res = await db.execute(sr_stmt)
+        existing_sr = sr_res.scalar_one_or_none()
+
+        if existing_sr:
+            source_record = existing_sr
+            is_new_record = False
+        else:
+            source_record = SourceRecord(
+                source_record_id=src_rec_id,
+                source_id=source.source_id,
+                dataset_id=dataset_id,
+                tenant_id=tenant_id,
+                external_id=prec.external_id,
+                raw_payload_uri=raw_uri,
+                content_hash=payload_hash,
+                raw_structure_string=prec.raw_structure_string,
+                status="INGESTED",
+            )
+            db.add(source_record)
+            await db.flush()
+            is_new_record = True
 
         # Chemical standardization and deduplication
         compound = None
@@ -118,7 +139,8 @@ async def run_ingestion_task(
                     db=db,
                     raw_smiles=prec.raw_structure_string,
                     identifiers=prec.identifiers,
-                    source_record_id=src_rec_id,
+                    source_record_id=source_record.source_record_id,
+                    tenant_id=tenant_id,
                 )
                 auditor.record_success(
                     is_duplicate=(not is_new),
@@ -159,7 +181,7 @@ async def run_ingestion_task(
 
         # Process bioactivity observations if compound is valid
         if compound and prec.bioactivity_payloads:
-            prov = await auditor.create_provenance(db, src_rec_id)
+            prov = await auditor.create_provenance(db, source_record.source_record_id)
             for b_pay in prec.bioactivity_payloads:
                 # Ensure Target exists
                 target_id = b_pay.get("target_id") or "TGT_GENERAL"
@@ -206,6 +228,7 @@ async def run_ingestion_task(
                         assay_type=b_pay.get("assay_type", "BINDING"),
                         target_id=target_id,
                         cell_line_id=cell_line_id,
+                        tenant_id=tenant_id,
                     )
                     db.add(assay)
                     await db.flush()
@@ -221,34 +244,50 @@ async def run_ingestion_task(
                 if norm.is_outlier:
                     auditor.record_activity_outlier()
 
-                bioactivity = Bioactivity(
-                    bioactivity_id=f"ACT_{uuid.uuid4().hex[:12].upper()}",
-                    compound_id=compound.compound_id,
-                    assay_id=assay_id,
-                    source_record_id=src_rec_id,
-                    provenance_id=prov.provenance_id,
-                    is_experimental=b_pay.get("is_experimental", False),
-                    activity_type=b_pay.get("activity_type", "IC50"),
-                    original_relation=norm.original_relation,
-                    original_value=norm.original_value,
-                    original_unit=norm.original_unit,
-                    normalized_relation=norm.normalized_relation,
-                    normalized_value=norm.normalized_value,
-                    normalized_unit=norm.normalized_unit,
-                    p_activity=norm.p_activity,
-                )
-                db.add(bioactivity)
+                # Deterministic bioactivity ID to enforce ingestion idempotency
+                b_key = f"{compound.compound_id}:{assay_id}:{b_pay.get('activity_type', 'IC50')}:{source_record.source_record_id}"
+                b_id = f"ACT_{hashlib.sha256(b_key.encode()).hexdigest()[:16].upper()}"
 
-                parquet_bioactivities.append({
-                    "bioactivity_id": bioactivity.bioactivity_id,
-                    "compound_id": compound.compound_id,
-                    "target_id": target_id,
-                    "activity_type": bioactivity.activity_type,
-                    "normalized_value": bioactivity.normalized_value,
-                    "normalized_unit": bioactivity.normalized_unit,
-                    "p_activity": bioactivity.p_activity,
-                    "is_experimental": bioactivity.is_experimental,
-                })
+                # Check if Bioactivity already exists
+                b_stmt = select(Bioactivity).where(Bioactivity.bioactivity_id == b_id)
+                b_res = await db.execute(b_stmt)
+                existing_bioact = b_res.scalar_one_or_none()
+
+                if not existing_bioact:
+                    bioactivity = Bioactivity(
+                        bioactivity_id=b_id,
+                        compound_id=compound.compound_id,
+                        assay_id=assay_id,
+                        source_record_id=source_record.source_record_id,
+                        provenance_id=prov.provenance_id,
+                        tenant_id=tenant_id,
+                        is_experimental=b_pay.get("is_experimental", False),
+                        activity_type=b_pay.get("activity_type", "IC50"),
+                        original_relation=norm.original_relation,
+                        original_value=norm.original_value,
+                        original_unit=norm.original_unit,
+                        normalized_relation=norm.normalized_relation,
+                        normalized_value=norm.normalized_value,
+                        normalized_unit=norm.normalized_unit,
+                        p_activity=norm.p_activity,
+                        p_activity_relation=norm.p_activity_relation,
+                        is_censored=norm.is_censored,
+                    )
+                    db.add(bioactivity)
+
+                    parquet_bioactivities.append({
+                        "bioactivity_id": bioactivity.bioactivity_id,
+                        "compound_id": compound.compound_id,
+                        "target_id": target_id,
+                        "tenant_id": tenant_id,
+                        "activity_type": bioactivity.activity_type,
+                        "normalized_value": bioactivity.normalized_value,
+                        "normalized_unit": bioactivity.normalized_unit,
+                        "p_activity": bioactivity.p_activity,
+                        "p_activity_relation": bioactivity.p_activity_relation,
+                        "is_censored": bioactivity.is_censored,
+                        "is_experimental": bioactivity.is_experimental,
+                    })
 
         # Report progress callback
         if progress_callback and (idx + 1) % 5 == 0:

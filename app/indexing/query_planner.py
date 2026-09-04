@@ -3,7 +3,7 @@ Decoupled Query Planner (Sections 14 & 38 of architecture).
 Translates SaaS search requests into candidate retrieval, structured filtering, ranking, and response assembly.
 """
 from typing import List, Dict, Any, Optional, Tuple
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from rdkit import Chem
@@ -47,15 +47,26 @@ class QueryPlanner:
         scaffold_smiles: Optional[str] = None,
         molecular_formula: Optional[str] = None,
         identifier: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        is_admin: bool = False,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
-        Executes multifaceted structured search across compound attributes.
+        Executes multifaceted structured search across compound attributes with tenant isolation.
         """
         query = select(Compound).join(Compound.features).join(Compound.structure)
 
         conditions = []
+        
+        # Multi-tenant isolation: non-admin tenants can only see shared public data (tenant_id IS NULL)
+        # or their own proprietary compounds (tenant_id == current_tenant)
+        if not is_admin:
+            if tenant_id:
+                conditions.append(or_(Compound.tenant_id.is_(None), Compound.tenant_id == tenant_id))
+            else:
+                conditions.append(Compound.tenant_id.is_(None))
+
         if exact_inchikey:
             conditions.append(Compound.inchikey == exact_inchikey.strip())
         if min_mw is not None:
@@ -123,10 +134,12 @@ class QueryPlanner:
         limit: int = 50,
         target_id: Optional[str] = None,
         activity_type: Optional[str] = None,
-        max_activity_nm: Optional[float] = None
+        max_activity_nm: Optional[float] = None,
+        tenant_id: Optional[str] = None,
+        is_admin: bool = False,
     ) -> Dict[str, Any]:
         """
-        Executes similarity search with optional joint bioactivity constraints.
+        Executes similarity search with optional joint bioactivity constraints and tenant isolation.
         """
         await self.ensure_similarity_index_populated(db)
 
@@ -136,10 +149,26 @@ class QueryPlanner:
 
         candidate_ids = None
 
+        # Multi-tenant compound boundary
+        if not is_admin:
+            if tenant_id:
+                t_stmt = select(Compound.compound_id).where(
+                    or_(Compound.tenant_id.is_(None), Compound.tenant_id == tenant_id)
+                )
+            else:
+                t_stmt = select(Compound.compound_id).where(Compound.tenant_id.is_(None))
+            allowed_cids = set((await db.execute(t_stmt)).scalars().all())
+            candidate_ids = allowed_cids
+
         # If bioactivity constraints are provided, find matching compound_ids first
         if target_id or activity_type or max_activity_nm is not None:
             bio_query = select(Bioactivity.compound_id).join(Bioactivity.assay)
             bio_conds = []
+            if not is_admin:
+                if tenant_id:
+                    bio_conds.append(or_(Bioactivity.tenant_id.is_(None), Bioactivity.tenant_id == tenant_id))
+                else:
+                    bio_conds.append(Bioactivity.tenant_id.is_(None))
             if target_id:
                 bio_conds.append(Assay.target_id == target_id)
             if activity_type:
@@ -149,7 +178,12 @@ class QueryPlanner:
 
             bio_query = bio_query.where(and_(*bio_conds))
             res = await db.execute(bio_query)
-            candidate_ids = set(res.scalars().all())
+            bio_cids = set(res.scalars().all())
+
+            if candidate_ids is None:
+                candidate_ids = bio_cids
+            else:
+                candidate_ids = candidate_ids.intersection(bio_cids)
 
             if not candidate_ids:
                 return {
@@ -182,32 +216,22 @@ class QueryPlanner:
             }
 
         # Hydrate compound metadata for matched IDs
-        matched_cids = [p[0] for p in similar_pairs]
-        score_map = {p[0]: p[1] for p in similar_pairs}
-
-        stmt = (
+        matched_ids = [cid for cid, _ in similar_pairs]
+        c_stmt = (
             select(Compound)
-            .where(Compound.compound_id.in_(matched_cids))
+            .where(Compound.compound_id.in_(matched_ids))
             .options(selectinload(Compound.features))
         )
-        res = await db.execute(stmt)
-        matched_compounds = {c.compound_id: c for c in res.scalars().all()}
+        c_res = await db.execute(c_stmt)
+        c_map = {c.compound_id: c for c in c_res.scalars().all()}
 
         items = []
         for cid, score in similar_pairs:
-            comp = matched_compounds.get(cid)
+            comp = c_map.get(cid)
             if comp:
-                items.append({
-                    "compound_id": comp.compound_id,
-                    "canonical_smiles": comp.canonical_smiles,
-                    "inchikey": comp.inchikey,
-                    "similarity_score": score,
-                    "molecular_formula": comp.molecular_formula,
-                    "molecular_weight": comp.molecular_weight,
-                    "clogp": comp.features.clogp if comp.features else 0.0,
-                    "tpsa": comp.features.tpsa if comp.features else 0.0,
-                    "murcko_scaffold_smiles": comp.murcko_scaffold_smiles,
-                })
+                c_dict = self._compound_to_dict(comp)
+                c_dict["similarity_score"] = score
+                items.append(c_dict)
 
         return {
             "query_smiles": query_smiles,
@@ -230,13 +254,16 @@ class QueryPlanner:
         min_normalized_value: Optional[float] = None,
         max_normalized_value: Optional[float] = None,
         min_p_activity: Optional[float] = None,
+        is_censored: Optional[bool] = None,
         is_experimental: Optional[bool] = None,
         source_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        is_admin: bool = False,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
-        Executes faceted bioactivity search across targets, cell lines, and activity types.
+        Executes faceted bioactivity search across targets, cell lines, and activity types with tenant isolation.
         """
         query = (
             select(Bioactivity)
@@ -253,6 +280,14 @@ class QueryPlanner:
         )
 
         conditions = []
+        
+        # Multi-tenant isolation: non-admin tenants see shared public data or their own records
+        if not is_admin:
+            if tenant_id:
+                conditions.append(or_(Bioactivity.tenant_id.is_(None), Bioactivity.tenant_id == tenant_id))
+            else:
+                conditions.append(Bioactivity.tenant_id.is_(None))
+
         if compound_id:
             conditions.append(Bioactivity.compound_id == compound_id.strip())
         if target_id:
@@ -269,6 +304,8 @@ class QueryPlanner:
             conditions.append(Bioactivity.normalized_value <= max_normalized_value)
         if min_p_activity is not None:
             conditions.append(Bioactivity.p_activity >= min_p_activity)
+        if is_censored is not None:
+            conditions.append(Bioactivity.is_censored == is_censored)
         if is_experimental is not None:
             conditions.append(Bioactivity.is_experimental == is_experimental)
         if source_id:
@@ -307,6 +344,8 @@ class QueryPlanner:
                 "normalized_value": b.normalized_value,
                 "normalized_unit": b.normalized_unit,
                 "p_activity": b.p_activity,
+                "p_activity_relation": b.p_activity_relation,
+                "is_censored": b.is_censored,
                 "is_experimental": b.is_experimental,
                 "source_name": b.source_record.source_id if b.source_record else None,
                 "external_id": b.source_record.external_id if b.source_record else None,
@@ -322,6 +361,7 @@ class QueryPlanner:
             "inchikey": comp.inchikey,
             "molecular_formula": comp.molecular_formula,
             "molecular_weight": comp.molecular_weight,
+            "has_stereochemistry": comp.has_stereochemistry,
             "clogp": comp.features.clogp if comp.features else 0.0,
             "tpsa": comp.features.tpsa if comp.features else 0.0,
             "heavy_atom_count": comp.heavy_atom_count,
