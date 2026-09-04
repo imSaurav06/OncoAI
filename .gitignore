@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Testing and cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Storage Data Lakes & DBs (generated data)
+data/
+storage/
+*.db
+*.sqlite3
+*.parquet
+
+# Environment Variables
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
