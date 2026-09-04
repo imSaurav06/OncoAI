@@ -143,7 +143,7 @@ async def run_ingestion_task(
                     tenant_id=tenant_id,
                 )
                 auditor.record_success(
-                    is_duplicate=(not is_new),
+                    is_duplicate=(not is_new_record),
                     was_modified=analysis.standardization.was_modified,
                     salt_stripped=analysis.standardization.salt_removed,
                     charge_neutralized=analysis.standardization.charge_neutralized,

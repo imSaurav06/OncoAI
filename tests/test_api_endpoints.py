@@ -109,3 +109,63 @@ def test_job_submission_and_status():
     status_res = client.get(f"/v1/jobs/{job_id}", headers=AUTH_HEADERS)
     assert status_res.status_code == 200
     assert status_res.json()["data"]["job_id"] == job_id
+
+
+def test_multi_tenant_job_isolation():
+    """Verify that Tenant B cannot access or view Tenant A's private background jobs."""
+    tenant_a_headers = {"X-API-Key": settings.API_KEY, "X-Tenant-ID": "tenant_pharma_a"}
+    tenant_b_headers = {"X-API-Key": settings.API_KEY, "X-Tenant-ID": "tenant_biotech_b"}
+
+    # Tenant A submits a job
+    res = client.post(
+        "/v1/jobs",
+        headers=tenant_a_headers,
+        json={"job_type": "STANDARDIZATION", "input_params": {"target": "BRAF"}},
+    )
+    assert res.status_code == 202
+    job_id = res.json()["data"]["job_id"]
+
+    # Tenant A can access their own job
+    res_a = client.get(f"/v1/jobs/{job_id}", headers=tenant_a_headers)
+    assert res_a.status_code == 200
+    assert res_a.json()["data"]["job_id"] == job_id
+
+    # Tenant B is blocked from viewing Tenant A's job (404 Not Found)
+    res_b = client.get(f"/v1/jobs/{job_id}", headers=tenant_b_headers)
+    assert res_b.status_code == 404
+
+
+def test_analyze_stereochemistry_flag():
+    """Verify that /v1/compounds/analyze accurately flags presence of stereocenters."""
+    # L-alanine has defined stereocenter
+    res_chiral = client.post(
+        "/v1/compounds/analyze",
+        headers=AUTH_HEADERS,
+        json={"smiles": "C[C@@H](N)C(=O)O"},
+    )
+    assert res_chiral.status_code == 200
+    assert res_chiral.json()["data"]["has_stereochemistry"] is True
+    assert "@" in res_chiral.json()["data"]["canonical_smiles"]
+
+    # Ethanol is achiral
+    res_achiral = client.post(
+        "/v1/compounds/analyze",
+        headers=AUTH_HEADERS,
+        json={"smiles": "CCO"},
+    )
+    assert res_achiral.status_code == 200
+    assert res_achiral.json()["data"]["has_stereochemistry"] is False
+
+
+def test_bioactivity_search_censored_filter():
+    """Verify that /v1/bioactivity/search can filter censored observations and exposes p_activity_relation."""
+    res = client.post(
+        "/v1/bioactivity/search",
+        headers=AUTH_HEADERS,
+        json={"is_censored": True, "limit": 10},
+    )
+    assert res.status_code == 200
+    items = res.json()["data"]["items"]
+    for item in items:
+        assert item["is_censored"] is True
+        assert item["p_activity_relation"] in ("<", "<=", ">", ">=", "~")

@@ -63,3 +63,30 @@ def test_fingerprint_tanimoto_self_similarity():
     fp2 = hex_to_fingerprint(res.fingerprint_hex)
     similarity = calculate_tanimoto_similarity(fp1, fp2)
     assert similarity == 1.0
+
+
+def test_stereochemistry_preservation_enantiomers():
+    """Verify that enantiomers retain their distinct stereocenters, isomeric SMILES, and InChIKeys."""
+    l_alanine = "C[C@@H](N)C(=O)O"
+    d_alanine = "C[C@H](N)C(=O)O"
+    
+    l_res = chemistry_pipeline.standardize(l_alanine)
+    d_res = chemistry_pipeline.standardize(d_alanine)
+    
+    # Stereochemistry is preserved in canonical_smiles
+    assert "@" in l_res.canonical_smiles
+    assert "@" in d_res.canonical_smiles
+    assert l_res.canonical_smiles != d_res.canonical_smiles
+    
+    # Stereochemistry flags are true
+    assert l_res.has_stereochemistry is True
+    assert d_res.has_stereochemistry is True
+    
+    # InChIKeys distinguish enantiomers in the second block
+    assert l_res.inchikey != d_res.inchikey
+    assert l_res.inchikey == "QNAYBMKLOCPYGJ-UWTATZPHSA-N"
+    assert d_res.inchikey == "QNAYBMKLOCPYGJ-REOHCLBHSA-N"
+    
+    # Achiral compound should have has_stereochemistry=False
+    achiral_res = chemistry_pipeline.standardize("CCO")
+    assert achiral_res.has_stereochemistry is False
