@@ -19,7 +19,7 @@ htmlcov/
 
 # Local Storage Data Lakes & DBs (generated data)
 data/
-storage/
+data/storage/
 *.db
 *.sqlite3
 *.parquet

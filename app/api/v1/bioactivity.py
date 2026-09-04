@@ -48,6 +48,7 @@ async def search_bioactivity(
         max_normalized_value=payload.max_normalized_value,
         min_p_activity=payload.min_p_activity,
         is_censored=payload.is_censored,
+        is_approximate=payload.is_approximate,
         is_experimental=payload.is_experimental,
         source_id=payload.source_id,
         tenant_id=auth.tenant_id,

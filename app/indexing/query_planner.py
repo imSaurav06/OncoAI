@@ -255,6 +255,7 @@ class QueryPlanner:
         max_normalized_value: Optional[float] = None,
         min_p_activity: Optional[float] = None,
         is_censored: Optional[bool] = None,
+        is_approximate: Optional[bool] = None,
         is_experimental: Optional[bool] = None,
         source_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
@@ -306,6 +307,8 @@ class QueryPlanner:
             conditions.append(Bioactivity.p_activity >= min_p_activity)
         if is_censored is not None:
             conditions.append(Bioactivity.is_censored == is_censored)
+        if is_approximate is not None:
+            conditions.append(Bioactivity.is_approximate == is_approximate)
         if is_experimental is not None:
             conditions.append(Bioactivity.is_experimental == is_experimental)
         if source_id:
@@ -346,6 +349,7 @@ class QueryPlanner:
                 "p_activity": b.p_activity,
                 "p_activity_relation": b.p_activity_relation,
                 "is_censored": b.is_censored,
+                "is_approximate": b.is_approximate,
                 "is_experimental": b.is_experimental,
                 "source_name": b.source_record.source_id if b.source_record else None,
                 "external_id": b.source_record.external_id if b.source_record else None,

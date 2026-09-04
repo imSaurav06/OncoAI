@@ -113,8 +113,8 @@ def test_job_submission_and_status():
 
 def test_multi_tenant_job_isolation():
     """Verify that Tenant B cannot access or view Tenant A's private background jobs."""
-    tenant_a_headers = {"X-API-Key": settings.API_KEY, "X-Tenant-ID": "tenant_pharma_a"}
-    tenant_b_headers = {"X-API-Key": settings.API_KEY, "X-Tenant-ID": "tenant_biotech_b"}
+    tenant_a_headers = {"X-API-Key": "onco_sk_tenant_pharma_a_sec123"}
+    tenant_b_headers = {"X-API-Key": "onco_sk_tenant_biotech_b_sec456"}
 
     # Tenant A submits a job
     res = client.post(

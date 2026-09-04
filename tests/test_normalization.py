@@ -31,26 +31,53 @@ def test_concentration_normalization_nanomolar():
 
 
 def test_pactivity_inequality_inversion_censoring():
-    """Verify that negative logarithm inverts greater-than to less-than and marks censored."""
-    # Inactive compound: IC50 > 10,000 nM -> pIC50 < 5.0
+    """Verify that negative logarithm inverts all inequalities and marks censored vs approximate correctly."""
+    # 1. Greater-than: IC50 > 10,000 nM -> pIC50 < 5.0
     meas_gt = normalize_bioactivity(10000.0, "nM", relation=">", activity_type="IC50")
     assert meas_gt.normalized_value == 10000.0
     assert meas_gt.p_activity == 5.0
     assert meas_gt.p_activity_relation == "<"
     assert meas_gt.is_censored is True
+    assert meas_gt.is_approximate is False
 
-    # High potency beyond detection limit: IC50 < 0.1 nM -> pIC50 > 10.0
+    # 2. Greater-than-or-equal: IC50 >= 1,000 nM -> pIC50 <= 6.0
+    meas_gte = normalize_bioactivity(1000.0, "nM", relation=">=", activity_type="IC50")
+    assert meas_gte.normalized_value == 1000.0
+    assert meas_gte.p_activity == 6.0
+    assert meas_gte.p_activity_relation == "<="
+    assert meas_gte.is_censored is True
+    assert meas_gte.is_approximate is False
+
+    # 3. Less-than: IC50 < 0.1 nM -> pIC50 > 10.0
     meas_lt = normalize_bioactivity(0.1, "nM", relation="<", activity_type="IC50")
     assert meas_lt.normalized_value == 0.1
     assert meas_lt.p_activity == 10.0
     assert meas_lt.p_activity_relation == ">"
     assert meas_lt.is_censored is True
+    assert meas_lt.is_approximate is False
 
-    # Exact observation: relation '=' -> p_activity_relation '='
+    # 4. Less-than-or-equal: IC50 <= 100 nM -> pIC50 >= 7.0
+    meas_lte = normalize_bioactivity(100.0, "nM", relation="<=", activity_type="IC50")
+    assert meas_lte.normalized_value == 100.0
+    assert meas_lte.p_activity == 7.0
+    assert meas_lte.p_activity_relation == ">="
+    assert meas_lte.is_censored is True
+    assert meas_lte.is_approximate is False
+
+    # 5. Approximate: IC50 ~ 50 nM -> pIC50 ~ 7.301 (NOT censored, is_approximate=True)
+    meas_approx = normalize_bioactivity(50.0, "nM", relation="~", activity_type="IC50")
+    assert meas_approx.normalized_value == 50.0
+    assert meas_approx.p_activity == 7.301
+    assert meas_approx.p_activity_relation == "~"
+    assert meas_approx.is_censored is False
+    assert meas_approx.is_approximate is True
+
+    # 6. Exact observation: relation '=' -> p_activity_relation '='
     meas_eq = normalize_bioactivity(50.0, "nM", relation="=", activity_type="IC50")
     assert meas_eq.normalized_value == 50.0
     assert meas_eq.p_activity_relation == "="
     assert meas_eq.is_censored is False
+    assert meas_eq.is_approximate is False
 
 
 def test_concentration_normalization_millimolar():

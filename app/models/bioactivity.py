@@ -117,6 +117,7 @@ class Bioactivity(Base, TimestampMixin):
     p_activity: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)
     p_activity_relation: Mapped[Optional[str]] = mapped_column(String(16), default="=", nullable=True)
     is_censored: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_approximate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
     # Relationships
     compound: Mapped["Compound"] = relationship("Compound", back_populates="bioactivities")

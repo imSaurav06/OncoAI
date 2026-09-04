@@ -146,9 +146,23 @@ class ChemistryPipeline:
             if pre_charge != post_charge:
                 charge_neutralized = True
 
-            # 4d: Tautomer canonicalization (with stereochemistry preservation)
+            # 4d: Tautomer canonicalization with robust stereocenter protection
+            orig_chiral_tags = {
+                atom.GetIdx(): atom.GetChiralTag()
+                for atom in uncharged_mol.GetAtoms()
+                if atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED
+            }
             final_mol = self.tautomer_enumerator.Canonicalize(uncharged_mol)
-            Chem.AssignStereochemistry(final_mol, force=True, cleanIt=True)
+
+            # Safeguard: if tautomer canonicalization degraded a known chiral center into unspecified '?'
+            # but the atom retains tetrahedral connectivity, restore its explicit chiral tag
+            for idx, tag in orig_chiral_tags.items():
+                if idx < final_mol.GetNumAtoms():
+                    target_atom = final_mol.GetAtomWithIdx(idx)
+                    if target_atom.GetChiralTag() == Chem.ChiralType.CHI_UNSPECIFIED:
+                        target_atom.SetChiralTag(tag)
+
+            Chem.AssignStereochemistry(final_mol, force=True, cleanIt=False)
 
         except Exception as exc:
             raise StandardizationError(
@@ -161,9 +175,19 @@ class ChemistryPipeline:
         canonical_smiles = Chem.MolToSmiles(final_mol, canonical=True, isomericSmiles=True)
         isomeric_smiles = canonical_smiles
         
-        # Check stereochemistry presence
-        chiral_centers = Chem.FindMolChiralCenters(final_mol, includeUnassigned=True)
-        has_stereochemistry = len(chiral_centers) > 0
+        # Check complete stereochemistry presence (both atom chiral centers and bond E/Z stereo)
+        atom_chiral_centers = Chem.FindMolChiralCenters(final_mol, includeUnassigned=True)
+        has_atom_stereo = len(atom_chiral_centers) > 0
+        has_bond_stereo = any(
+            b.GetStereo() in (
+                Chem.BondStereo.STEREOE,
+                Chem.BondStereo.STEREOZ,
+                Chem.BondStereo.STEREOCIS,
+                Chem.BondStereo.STEREOTRANS,
+            )
+            for b in final_mol.GetBonds()
+        )
+        has_stereochemistry = bool(has_atom_stereo or has_bond_stereo)
         
         try:
             inchi = Chem.MolToInchi(final_mol)

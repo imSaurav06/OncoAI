@@ -24,6 +24,7 @@ class NormalizedMeasurement:
     p_activity: Optional[float]
     p_activity_relation: Optional[str] = "="
     is_censored: bool = False
+    is_approximate: bool = False
     is_outlier: bool = False
     qc_warning: Optional[str] = None
 
@@ -145,7 +146,8 @@ def normalize_bioactivity(
     # Calculate pActivity (-log10 Molar) for concentration types (IC50, EC50, Ki, Kd, GI50)
     p_activity = None
     p_activity_relation = "="
-    is_censored = orig_rel in ("<", "<=", ">", ">=", "~")
+    is_censored = orig_rel in ("<", "<=", ">", ">=")
+    is_approximate = orig_rel in ("~", "approx")
 
     act_type_upper = (activity_type or "").upper()
     if norm_unit == "nM" and norm_val > 0 and act_type_upper in ("IC50", "EC50", "KI", "KD", "GI50", "POTENCY"):
@@ -176,6 +178,7 @@ def normalize_bioactivity(
         p_activity=p_activity,
         p_activity_relation=p_activity_relation,
         is_censored=is_censored,
+        is_approximate=is_approximate,
         is_outlier=is_outlier,
         qc_warning=qc_warning,
     )
